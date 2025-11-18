@@ -194,7 +194,7 @@ assert.Equal(t, "John Doe", user.Name)
 - Docker Desktop이 실행 중인지 확인
 - Docker 소켓 권한 확인 (Linux)
 - WSL2에서 Docker 연동 확인 (Windows)
-- /tmp에서 실행이 되는 경우 mkdir -p ~/tmp && export TMP=~/tmp 실행하고 테스트 
+- /tmp에서 실행이 되는 경우 mkdir -p ~/tmp && export TMPDIR=~/tmp 실행하고 테스트 
 
 ### 테스트 관련
 - **포트 충돌**: 이미 사용 중인 포트가 있는지 확인
