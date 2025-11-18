@@ -2,39 +2,76 @@ package redis
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
-func TestRedisBasicOperations(t *testing.T) {
-	ctx := context.Background()
+var (
+	testClient   *Client
+	testEndpoint string
+)
 
-	// Redis 컨테이너 시작
+func TestMain(m *testing.M) {
+
+	// 타임아웃 설정
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Redis 컨테이너 시작 (모든 테스트에서 공유)
 	redisContainer, err := redis.Run(ctx,
-		"redis:7-alpine",
+		"redis:7.2",
+		redis.WithSnapshotting(10, 1),
+		redis.WithLogLevel(redis.LogLevelVerbose),
 	)
-	require.NoError(t, err)
-	defer func() {
-		if err := testcontainers.TerminateContainer(redisContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}()
+	if err != nil {
+		panic(err)
+	}
 
 	// 연결 정보 얻기
-	endpoint, err := redisContainer.Endpoint(ctx, "")
-	require.NoError(t, err)
+	testEndpoint, err = redisContainer.Endpoint(ctx, "")
+	if err != nil {
+		_ = testcontainers.TerminateContainer(redisContainer)
+		panic(err)
+	}
 
 	// 클라이언트 생성
-	client := NewClient(endpoint)
-	defer client.Close()
+	testClient = NewClient(testEndpoint)
+
+	// 연결 확인
+	if err := testClient.Ping(ctx); err != nil {
+		testClient.Close()
+		_ = testcontainers.TerminateContainer(redisContainer)
+		panic("failed to ping redis: " + err.Error())
+	}
+
+	// 테스트 실행
+	code := m.Run()
+
+	// 정리
+	if testClient != nil {
+		testClient.Close()
+	}
+	if err := testcontainers.TerminateContainer(redisContainer); err != nil {
+		panic(err)
+	}
+
+	os.Exit(code)
+}
+
+func TestRedisBasicOperations(t *testing.T) {
+	ctx := context.Background()
+	client := testClient
+
+	// 테스트 전 키 정리
+	_ = client.Delete(ctx, "test-key")
 
 	// Ping 테스트
-	err = client.Ping(ctx)
+	err := client.Ping(ctx)
 	assert.NoError(t, err)
 
 	// Set/Get 테스트
@@ -61,23 +98,13 @@ func TestRedisBasicOperations(t *testing.T) {
 
 func TestRedisExpiration(t *testing.T) {
 	ctx := context.Background()
+	client := testClient
 
-	redisContainer, err := redis.Run(ctx, "redis:7-alpine")
-	require.NoError(t, err)
-	defer func() {
-		if err := testcontainers.TerminateContainer(redisContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}()
-
-	endpoint, err := redisContainer.Endpoint(ctx, "")
-	require.NoError(t, err)
-
-	client := NewClient(endpoint)
-	defer client.Close()
+	// 테스트 전 키 정리
+	_ = client.Delete(ctx, "expiring-key")
 
 	// TTL을 가진 키 설정
-	err = client.Set(ctx, "expiring-key", "value", 1*time.Second)
+	err := client.Set(ctx, "expiring-key", "value", 1*time.Second)
 	assert.NoError(t, err)
 
 	// 즉시 조회 - 존재해야 함
@@ -95,20 +122,10 @@ func TestRedisExpiration(t *testing.T) {
 
 func TestRedisIncrement(t *testing.T) {
 	ctx := context.Background()
+	client := testClient
 
-	redisContainer, err := redis.Run(ctx, "redis:7-alpine")
-	require.NoError(t, err)
-	defer func() {
-		if err := testcontainers.TerminateContainer(redisContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}()
-
-	endpoint, err := redisContainer.Endpoint(ctx, "")
-	require.NoError(t, err)
-
-	client := NewClient(endpoint)
-	defer client.Close()
+	// 테스트 전 키 정리
+	_ = client.Delete(ctx, "counter")
 
 	// Increment 테스트
 	val, err := client.Increment(ctx, "counter")
@@ -127,23 +144,13 @@ func TestRedisIncrement(t *testing.T) {
 
 func TestRedisHash(t *testing.T) {
 	ctx := context.Background()
+	client := testClient
 
-	redisContainer, err := redis.Run(ctx, "redis:7-alpine")
-	require.NoError(t, err)
-	defer func() {
-		if err := testcontainers.TerminateContainer(redisContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}()
-
-	endpoint, err := redisContainer.Endpoint(ctx, "")
-	require.NoError(t, err)
-
-	client := NewClient(endpoint)
-	defer client.Close()
+	// 테스트 전 키 정리
+	_ = client.Delete(ctx, "user:1")
 
 	// HSet 테스트
-	err = client.HSet(ctx, "user:1", "name", "John", "email", "john@example.com")
+	err := client.HSet(ctx, "user:1", "name", "John", "email", "john@example.com")
 	assert.NoError(t, err)
 
 	// HGet 테스트
@@ -166,23 +173,13 @@ func TestRedisHash(t *testing.T) {
 
 func TestRedisList(t *testing.T) {
 	ctx := context.Background()
+	client := testClient
 
-	redisContainer, err := redis.Run(ctx, "redis:7-alpine")
-	require.NoError(t, err)
-	defer func() {
-		if err := testcontainers.TerminateContainer(redisContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}()
-
-	endpoint, err := redisContainer.Endpoint(ctx, "")
-	require.NoError(t, err)
-
-	client := NewClient(endpoint)
-	defer client.Close()
+	// 테스트 전 키 정리
+	_ = client.Delete(ctx, "queue", "stack")
 
 	// RPush 테스트
-	err = client.RPush(ctx, "queue", "item1", "item2", "item3")
+	err := client.RPush(ctx, "queue", "item1", "item2", "item3")
 	assert.NoError(t, err)
 
 	// LRange 테스트
