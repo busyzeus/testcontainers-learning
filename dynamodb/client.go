@@ -80,13 +80,19 @@ func (c *Client) GetItem(ctx context.Context, tableName string, key map[string]t
 }
 
 // UpdateItem은 항목을 업데이트합니다
-func (c *Client) UpdateItem(ctx context.Context, tableName string, key map[string]types.AttributeValue, updateExpression string, expressionAttributeValues map[string]types.AttributeValue) error {
-	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+func (c *Client) UpdateItem(ctx context.Context, tableName string, key map[string]types.AttributeValue, updateExpression string, expressionAttributeValues map[string]types.AttributeValue, expressionAttributeNames map[string]string) error {
+	input := &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(tableName),
 		Key:                       key,
 		UpdateExpression:          aws.String(updateExpression),
 		ExpressionAttributeValues: expressionAttributeValues,
-	})
+	}
+
+	if len(expressionAttributeNames) > 0 {
+		input.ExpressionAttributeNames = expressionAttributeNames
+	}
+
+	_, err := c.ddb.UpdateItem(ctx, input)
 	return err
 }
 

@@ -3,9 +3,10 @@ package dynamodb
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
+	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -15,24 +16,44 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/localstack"
 )
 
-func setupDynamoDB(t *testing.T) (*Client, func()) {
-	ctx := context.Background()
+var (
+	testClient *Client
+)
+
+func TestMain(m *testing.M) {
+	// RYUK 비활성화
+	os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	// LocalStack 컨테이너 시작 (DynamoDB 포함)
 	localstackContainer, err := localstack.Run(ctx,
 		"localstack/localstack:3.0",
 	)
-	require.NoError(t, err)
+	if err != nil {
+		panic(err)
+	}
 
 	// Provider를 통해 호스트 정보 얻기
 	provider, err := testcontainers.NewDockerProvider()
-	require.NoError(t, err)
+	if err != nil {
+		panic(err)
+	}
 
 	host, err := provider.DaemonHost(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		provider.Close()
+		_ = testcontainers.TerminateContainer(localstackContainer)
+		panic(err)
+	}
 
 	mappedPort, err := localstackContainer.MappedPort(ctx, "4566/tcp")
-	require.NoError(t, err)
+	if err != nil {
+		provider.Close()
+		_ = testcontainers.TerminateContainer(localstackContainer)
+		panic(err)
+	}
 
 	endpoint := fmt.Sprintf("http://%s:%s", host, mappedPort.Port())
 
@@ -41,43 +62,56 @@ func setupDynamoDB(t *testing.T) (*Client, func()) {
 		config.WithRegion("us-east-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
 	)
-	require.NoError(t, err)
-
-	client := NewClient(cfg, endpoint)
-
-	cleanup := func() {
+	if err != nil {
 		provider.Close()
-		if err := testcontainers.TerminateContainer(localstackContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
+		_ = testcontainers.TerminateContainer(localstackContainer)
+		panic(err)
 	}
 
-	return client, cleanup
+	testClient = NewClient(cfg, endpoint)
+
+	// 테스트 실행
+	code := m.Run()
+
+	// 정리
+	provider.Close()
+	if err := testcontainers.TerminateContainer(localstackContainer); err != nil {
+		panic(err)
+	}
+
+	os.Exit(code)
 }
 
 func TestDynamoDBCreateTable(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
+	client := testClient
 
 	ctx := context.Background()
+	tableName := "test-table"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
-	err := client.CreateTable(ctx, "test-table")
+	err := client.CreateTable(ctx, tableName)
 	assert.NoError(t, err)
 
 	// 테이블 정보 조회
-	output, err := client.DescribeTable(ctx, "test-table")
+	output, err := client.DescribeTable(ctx, tableName)
 	assert.NoError(t, err)
-	assert.Equal(t, "test-table", *output.Table.TableName)
+	assert.Equal(t, tableName, *output.Table.TableName)
 	assert.Equal(t, types.TableStatusActive, output.Table.TableStatus)
+
+	// 테스트 후 정리
+	_ = client.DeleteTable(ctx, tableName)
 }
 
 func TestDynamoDBPutAndGetItem(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
-
+	client := testClient
 	ctx := context.Background()
 	tableName := "users"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
 	err := client.CreateTable(ctx, tableName)
@@ -114,11 +148,12 @@ func TestDynamoDBPutAndGetItem(t *testing.T) {
 }
 
 func TestDynamoDBUpdateItem(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
-
+	client := testClient
 	ctx := context.Background()
-	tableName := "users"
+	tableName := "users-update"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
 	err := client.CreateTable(ctx, tableName)
@@ -137,11 +172,14 @@ func TestDynamoDBUpdateItem(t *testing.T) {
 		"id": &types.AttributeValueMemberS{Value: "user-1"},
 	}
 	updateExpression := "SET #n = :name"
+	expressionAttributeNames := map[string]string{
+		"#n": "name",
+	}
 	expressionAttributeValues := map[string]types.AttributeValue{
 		":name": &types.AttributeValueMemberS{Value: "Jane Doe"},
 	}
 
-	err = client.UpdateItem(ctx, tableName, key, updateExpression, expressionAttributeValues)
+	err = client.UpdateItem(ctx, tableName, key, updateExpression, expressionAttributeValues, expressionAttributeNames)
 	assert.NoError(t, err)
 
 	// 업데이트된 항목 조회
@@ -154,11 +192,12 @@ func TestDynamoDBUpdateItem(t *testing.T) {
 }
 
 func TestDynamoDBDeleteItem(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
-
+	client := testClient
 	ctx := context.Background()
-	tableName := "users"
+	tableName := "users-delete"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
 	err := client.CreateTable(ctx, tableName)
@@ -186,11 +225,12 @@ func TestDynamoDBDeleteItem(t *testing.T) {
 }
 
 func TestDynamoDBScan(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
-
+	client := testClient
 	ctx := context.Background()
-	tableName := "users"
+	tableName := "users-scan"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
 	err := client.CreateTable(ctx, tableName)
@@ -224,11 +264,12 @@ func TestDynamoDBScan(t *testing.T) {
 }
 
 func TestDynamoDBQuery(t *testing.T) {
-	client, cleanup := setupDynamoDB(t)
-	defer cleanup()
-
+	client := testClient
 	ctx := context.Background()
-	tableName := "users"
+	tableName := "users-query"
+
+	// 테스트 전 테이블 정리
+	_ = client.DeleteTable(ctx, tableName)
 
 	// 테이블 생성
 	err := client.CreateTable(ctx, tableName)

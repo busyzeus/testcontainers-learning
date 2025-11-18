@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	dbName   = "testdb"
-	dbUser   = "testuser"
-	dbPass   = "testpass"
+	dbName = "testdb"
+	dbUser = "testuser"
+	dbPass = "testpass"
 )
 
 func setupPostgres(t *testing.T) (*Client, func()) {
@@ -25,7 +25,7 @@ func setupPostgres(t *testing.T) (*Client, func()) {
 
 	// PostgreSQL 컨테이너 시작
 	postgresContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
+		"postgres:18-alpine",
 		postgres.WithDatabase(dbName),
 		postgres.WithUsername(dbUser),
 		postgres.WithPassword(dbPass),
