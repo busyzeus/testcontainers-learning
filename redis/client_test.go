@@ -16,6 +16,8 @@ var (
 	testEndpoint string
 )
 
+//tmp에서 실행이 되는 경우 mkdir -p ~/tmp && export TMP=~/tmp 실행하고 테스트
+
 func TestMain(m *testing.M) {
 
 	// 타임아웃 설정
